@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#020617"/>
+      <stop offset="50%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#064e3b"/>
+    </linearGradient>
+    <linearGradient id="primaryGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Background Base -->
+  <rect width="512" height="512" rx="110" fill="url(#bgGrad)"/>
+  <rect width="496" height="496" x="8" y="8" rx="102" fill="none" stroke="#10b981" stroke-width="4" stroke-opacity="0.3"/>
+
+  <!-- Glowing Outer Halo -->
+  <circle cx="256" cy="256" r="160" fill="#10b981" opacity="0.12" filter="url(#glow)"/>
+
+  <!-- Urna / Ballot Box Silhouette -->
+  <g transform="translate(106, 96)">
+    <!-- Box Body -->
+    <rect x="20" y="70" width="260" height="230" rx="24" fill="#1e293b" stroke="#334155" stroke-width="6"/>
+    
+    <!-- Top Slit Platform -->
+    <path d="M 0 70 L 40 10 L 260 10 L 300 70 Z" fill="#0f172a" stroke="#334155" stroke-width="6"/>
+    
+    <!-- Slot -->
+    <rect x="90" y="32" width="120" height="12" rx="6" fill="#020617"/>
+    
+    <!-- Voting Paper / Ballot Sliding in -->
+    <g transform="translate(110, -10)">
+      <rect x="0" y="0" width="80" height="80" rx="8" fill="#ffffff" stroke="#94a3b8" stroke-width="3"/>
+      <rect x="12" y="14" width="56" height="8" rx="4" fill="#10b981"/>
+      <rect x="12" y="28" width="40" height="6" rx="3" fill="#cbd5e1"/>
+      <rect x="12" y="40" width="48" height="6" rx="3" fill="#cbd5e1"/>
+      <circle cx="58" cy="56" r="8" fill="#fbbf24"/>
+    </g>
+
+    <!-- Urna Screen Interface -->
+    <rect x="42" y="100" width="130" height="100" rx="12" fill="#020617" stroke="#10b981" stroke-width="3"/>
+    
+    <!-- QR Code Graphic on Screen -->
+    <rect x="56" y="114" width="28" height="28" rx="4" fill="#10b981"/>
+    <rect x="62" y="120" width="16" height="16" rx="2" fill="#020617"/>
+    <rect x="66" y="124" width="8" height="8" fill="#10b981"/>
+    
+    <rect x="100" y="114" width="28" height="28" rx="4" fill="#10b981"/>
+    <rect x="106" y="120" width="16" height="16" rx="2" fill="#020617"/>
+    <rect x="110" y="124" width="8" height="8" fill="#10b981"/>
+
+    <rect x="56" y="156" width="28" height="28" rx="4" fill="#10b981"/>
+    <rect x="62" y="162" width="16" height="16" rx="2" fill="#020617"/>
+    <rect x="66" y="166" width="8" height="8" fill="#10b981"/>
+
+    <rect x="98" y="156" width="12" height="12" fill="#10b981"/>
+    <rect x="116" y="156" width="12" height="12" fill="#10b981"/>
+    <rect x="98" y="172" width="30" height="12" fill="#10b981"/>
+
+    <!-- Keypad -->
+    <g transform="translate(190, 102)">
+      <rect x="0" y="0" width="76" height="100" rx="8" fill="#0f172a" stroke="#334155" stroke-width="2"/>
+      <!-- Keys -->
+      <circle cx="16" cy="18" r="7" fill="#334155"/>
+      <circle cx="38" cy="18" r="7" fill="#334155"/>
+      <circle cx="60" cy="18" r="7" fill="#334155"/>
+      <circle cx="16" cy="38" r="7" fill="#334155"/>
+      <circle cx="38" cy="38" r="7" fill="#334155"/>
+      <circle cx="60" cy="38" r="7" fill="#334155"/>
+      <circle cx="16" cy="58" r="7" fill="#334155"/>
+      <circle cx="38" cy="58" r="7" fill="#334155"/>
+      <circle cx="60" cy="58" r="7" fill="#334155"/>
+      <!-- Action buttons -->
+      <rect x="8" y="74" width="18" height="14" rx="3" fill="#ffffff"/>
+      <rect x="29" y="74" width="18" height="14" rx="3" fill="#ef4444"/>
+      <rect x="50" y="74" width="18" height="14" rx="3" fill="#10b981"/>
+    </g>
+
+    <!-- SP State Badge -->
+    <g transform="translate(42, 224)">
+      <rect x="0" y="0" width="216" height="50" rx="14" fill="#020617" stroke="#10b981" stroke-width="2"/>
+      <text x="108" y="32" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="22" fill="#ffffff" text-anchor="middle" letter-spacing="3">
+        SÃO PAULO
+      </text>
+    </g>
+  </g>
+
+  <!-- Green & Gold Trim Accents -->
+  <path d="M 120 450 Q 256 470 392 450" fill="none" stroke="url(#goldGrad)" stroke-width="6" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,6 @@
+{
+  "name": "BU Leitor - Auditoria & Leitor de Boletim de Urna TSE",
+  "description": "Aplicativo e Painel Web para leitura, auditoria independente e totalização de QR Codes do Boletim de Urna (BU) da Justiça Eleitoral.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
