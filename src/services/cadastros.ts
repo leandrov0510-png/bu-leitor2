@@ -1,8 +1,10 @@
 import { supabase } from '../lib/supabaseClient';
-import { BoletimDeUrna } from '../types';
+import { BoletimDeUrna, CandidatoFederalAlvo } from '../types';
+import { CANDIDATO_ALVO_DEFAULT } from '../db/database';
 import { dbSalvarBoletim, dbListarBoletins, dbRemoverBoletim, dbAtualizarStatusSync, dbRegistrarLog } from '../db/database';
 
 export const TABELA_BOLETINS = 'boletins_urna';
+export const TABELA_SETTINGS = 'app_settings';
 
 export interface ConectividadeResultado {
   online: boolean;
@@ -131,7 +133,6 @@ export async function cadastrarBoletimOnline(bu: BoletimDeUrna): Promise<Boletim
     atualizado_em: new Date().toISOString()
   };
 
-  // Se o dispositivo estiver offline
   if (typeof navigator !== 'undefined' && !navigator.onLine) {
     bu.syncStatus = 'pending';
     await dbSalvarBoletim(bu).catch(() => {});
@@ -149,7 +150,6 @@ export async function cadastrarBoletimOnline(bu: BoletimDeUrna): Promise<Boletim
 
   if (error) {
     console.error('ERRO AO SALVAR NO SUPABASE:', error);
-    // Salva cópia com erro no cache para auditoria
     bu.syncStatus = 'error';
     await dbSalvarBoletim(bu).catch(() => {});
     await dbRegistrarLog({
@@ -179,6 +179,49 @@ export async function cadastrarBoletimOnline(bu: BoletimDeUrna): Promise<Boletim
 }
 
 /**
+ * Atualiza um boletim existente no Supabase (ex: edição de observações ou status pelo painel)
+ */
+export async function atualizarBoletimOnline(id: string, updates: Partial<BoletimDeUrna>): Promise<BoletimDeUrna> {
+  // 1. Busca o boletim atual
+  const { data: atual, error: buscaErr } = await supabase
+    .from(TABELA_BOLETINS)
+    .select('*')
+    .eq('id', id)
+    .single();
+
+  if (buscaErr) {
+    throw new Error(`Falha ao localizar BU para edição: ${mapearErroSupabase(buscaErr)}`);
+  }
+
+  const jsonAtual = atual.dados_completos_json || {};
+  const jsonAtualizado = { ...jsonAtual, ...updates };
+
+  const payload: any = {
+    dados_completos_json: jsonAtualizado,
+    atualizado_em: new Date().toISOString()
+  };
+
+  if (updates.fiscalNome !== undefined) payload.fiscal_nome = updates.fiscalNome;
+  if (updates.fiscalCargo !== undefined) payload.fiscal_cargo = updates.fiscalCargo;
+
+  const { data: res, error: updateErr } = await supabase
+    .from(TABELA_BOLETINS)
+    .update(payload)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (updateErr) {
+    throw new Error(`Erro ao atualizar no Supabase: ${mapearErroSupabase(updateErr)}`);
+  }
+
+  const buAtualizado: BoletimDeUrna = res.dados_completos_json;
+  buAtualizado.syncStatus = 'synced';
+  await dbSalvarBoletim(buAtualizado).catch(() => {});
+  return buAtualizado;
+}
+
+/**
  * 4. CORRIGIR A LEITURA DO PAINEL ADMINISTRATIVO
  * Busca todos os registros diretamente do Supabase PostgreSQL.
  * Se offline, usa o cache local com aviso claro.
@@ -193,8 +236,6 @@ export async function listarBoletinsOnline(): Promise<{ boletins: BoletimDeUrna[
     if (error) {
       console.error('ERRO AO BUSCAR DADOS DO SUPABASE:', error);
       const erroMsg = mapearErroSupabase(error);
-      
-      // Fallback para cache local em caso de erro remoto
       const locais = await dbListarBoletins();
       return {
         boletins: locais,
@@ -285,92 +326,180 @@ export async function excluirBoletimOnline(id: string): Promise<void> {
 
 /**
  * 5. GARANTIR SINCRONIZAÇÃO ENTRE CELULARES (REALTIME)
- * Escuta INSERT, UPDATE e DELETE na tabela boletins_urna via postgres_changes.
+ * Escuta INSERT, UPDATE e DELETE na tabela boletins_urna e app_settings via postgres_changes.
  */
 export function assinarRealtimeBoletins(callbacks: {
   onInsert?: (bu: BoletimDeUrna) => void;
   onUpdate?: (bu: BoletimDeUrna) => void;
   onDelete?: (id: string) => void;
+  onSettingsUpdate?: (key: string, value: any) => void;
   onError?: (err: any) => void;
 }): () => void {
-  const channelName = `realtime_${TABELA_BOLETINS}_${Date.now()}`;
-  
-  const channel = supabase
-    .channel(channelName)
-    .on(
-      'postgres_changes',
-      {
-        event: '*',
-        schema: 'public',
-        table: TABELA_BOLETINS
-      },
-      (payload) => {
-        console.log('[REALTIME] Evento recebido:', payload.eventType, payload);
+  const channelName = `realtime_hub_${Date.now()}`;
 
-        if (payload.eventType === 'INSERT') {
-          const novo = payload.new as any;
-          const bu: BoletimDeUrna = novo.dados_completos_json || {
-            id: novo.id,
-            uf: novo.uf,
-            municipioCodigo: novo.municipio_codigo,
-            municipioNome: novo.municipio_nome,
-            zona: novo.zona,
-            secao: novo.secao,
-            idUrna: novo.urna_id,
-            comparecimento: novo.comparecimento,
-            abstencao: novo.abstencao,
-            eleitoresAptos: novo.eleitores_aptos,
-            dados_completos_json: novo,
-            syncStatus: 'synced',
-            createdAt: new Date(novo.created_at).getTime(),
-            cargos: {}
-          };
-          bu.syncStatus = 'synced';
-          dbSalvarBoletim(bu).catch(() => {});
-          callbacks.onInsert?.(bu);
-        } else if (payload.eventType === 'UPDATE') {
-          const atualizado = payload.new as any;
-          const bu: BoletimDeUrna = atualizado.dados_completos_json || {
-            id: atualizado.id,
-            uf: atualizado.uf,
-            municipioCodigo: atualizado.municipio_codigo,
-            municipioNome: atualizado.municipio_nome,
-            zona: atualizado.zona,
-            secao: atualizado.secao,
-            idUrna: atualizado.urna_id,
-            comparecimento: atualizado.comparecimento,
-            abstencao: atualizado.abstencao,
-            eleitoresAptos: atualizado.eleitores_aptos,
-            dados_completos_json: atualizado,
-            syncStatus: 'synced',
-            createdAt: new Date(atualizado.created_at).getTime(),
-            cargos: {}
-          };
-          bu.syncStatus = 'synced';
-          dbSalvarBoletim(bu).catch(() => {});
-          callbacks.onUpdate?.(bu);
-        } else if (payload.eventType === 'DELETE') {
-          const id = (payload.old as any)?.id;
-          if (id) {
-            dbRemoverBoletim(id).catch(() => {});
-            callbacks.onDelete?.(id);
+  let reconnectTimer: NodeJS.Timeout | null = null;
+  let attempt = 0;
+  const maxAttempts = 5;
+  const baseDelay = 2000; // ms
+
+  const subscribe = () => {
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: TABELA_BOLETINS
+        },
+        (payload) => {
+          console.log('[REALTIME] Evento recebido em boletins_urna:', payload.eventType, payload);
+
+          if (payload.eventType === 'INSERT') {
+            const novo = payload.new as any;
+            const bu: BoletimDeUrna = novo.dados_completos_json || {
+              id: novo.id,
+              uf: novo.uf,
+              municipioCodigo: novo.municipio_codigo,
+              municipioNome: novo.municipio_nome,
+              zona: novo.zona,
+              secao: novo.secao,
+              idUrna: novo.urna_id,
+              comparecimento: novo.comparecimento,
+              abstencao: novo.abstencao,
+              eleitoresAptos: novo.eleitores_aptos,
+              dados_completos_json: novo,
+              syncStatus: 'synced',
+              createdAt: new Date(novo.created_at).getTime(),
+              cargos: {}
+            };
+            bu.syncStatus = 'synced';
+            dbSalvarBoletim(bu).catch(() => {});
+            callbacks.onInsert?.(bu);
+          } else if (payload.eventType === 'UPDATE') {
+            const atualizado = payload.new as any;
+            const bu: BoletimDeUrna = atualizado.dados_completos_json || {
+              id: atualizado.id,
+              uf: atualizado.uf,
+              municipioCodigo: atualizado.municipio_codigo,
+              municipioNome: atualizado.municipio_nome,
+              zona: atualizado.zona,
+              secao: atualizado.secao,
+              idUrna: atualizado.urna_id,
+              comparecimento: atualizado.comparecimento,
+              abstencao: atualizado.abstencao,
+              eleitoresAptos: atualizado.eleitores_aptos,
+              dados_completos_json: atualizado,
+              syncStatus: 'synced',
+              createdAt: new Date(atualizado.created_at).getTime(),
+              cargos: {}
+            };
+            bu.syncStatus = 'synced';
+            dbSalvarBoletim(bu).catch(() => {});
+            callbacks.onUpdate?.(bu);
+          } else if (payload.eventType === 'DELETE') {
+            const id = (payload.old as any)?.id;
+            if (id) {
+              dbRemoverBoletim(id).catch(() => {});
+              callbacks.onDelete?.(id);
+            }
           }
         }
-      }
-    )
-    .subscribe((status, err) => {
-      console.log('[REALTIME] Status da inscrição:', status);
-      if (err) {
-        console.error('[REALTIME] Erro no canal:', err);
-        callbacks.onError?.(err);
-      }
-    });
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: TABELA_SETTINGS
+        },
+        (payload) => {
+          console.log('[REALTIME] Evento recebido em app_settings:', payload.eventType, payload);
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const record = payload.new as any;
+            if (record && record.key) {
+              callbacks.onSettingsUpdate?.(record.key, record.value);
+            }
+          }
+        }
+      )
+      .subscribe((status, err) => {
+        console.log('[REALTIME] Status da inscrição:', status);
+        if (err) {
+          console.error('[REALTIME] Erro no canal:', err);
+          callbacks.onError?.(err);
+        }
+        // Handle reconnection scenarios
+        if (status === 'TIMED_OUT' || status === 'CLOSED') {
+          console.warn(`[REALTIME] Canal ${status}. Tentando reconectar...`);
+          if (attempt < maxAttempts) {
+            const delay = baseDelay * Math.pow(2, attempt);
+            attempt++;
+            reconnectTimer = setTimeout(() => {
+              console.log('[REALTIME] Reconnect attempt', attempt);
+              subscribe();
+            }, delay);
+          } else {
+            console.error('[REALTIME] Máximo de tentativas de reconexão atingido.');
+          }
+        }
+      });
 
-  // Retorna função para desmontar canal adequadamente
-  return () => {
-    console.log('[REALTIME] Desinscrevendo canal:', channelName);
-    supabase.removeChannel(channel);
+    // Cleanup function will also clear any pending reconnection timer
+    return () => {
+      console.log('[REALTIME] Desinscrevendo canal:', channelName);
+      supabase.removeChannel(channel);
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
   };
+
+  // Inicia a primeira inscrição
+  const cleanup = subscribe();
+
+  // Retorna função que limpa canal e timer
+  return () => {
+    cleanup();
+  };
+}
+// Duplicate realtime logic removed
+
+/**
+ * CONFIGURAÇÕES GLOBAIS COMPARTILHADAS (Candidato Alvo, Foto de Capa, Senha Admin)
+ * Gravadas e consultadas diretamente no Supabase PostgreSQL.
+ */
+export async function obterCandidatoAlvoOnline(): Promise<CandidatoFederalAlvo> {
+  try {
+    const { data, error } = await supabase
+      .from(TABELA_SETTINGS)
+      .select('value')
+      .eq('key', 'candidato_alvo')
+      .maybeSingle();
+
+    if (!error && data && data.value) {
+      return data.value as CandidatoFederalAlvo;
+    }
+  } catch (err) {
+    console.warn('Erro ao obter candidato alvo do Supabase:', err);
+  }
+  return CANDIDATO_ALVO_DEFAULT;
+}
+
+export async function salvarCandidatoAlvoOnline(alvo: CandidatoFederalAlvo): Promise<void> {
+  const { error } = await supabase
+    .from(TABELA_SETTINGS)
+    .upsert({
+      key: 'candidato_alvo',
+      value: alvo,
+      atualizado_em: new Date().toISOString()
+    }, { onConflict: 'key' });
+
+  if (error) {
+    console.error('ERRO AO SALVAR CANDIDATO ALVO NO SUPABASE:', error);
+    throw new Error(mapearErroSupabase(error));
+  }
 }
 
 /**

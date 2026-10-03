@@ -556,24 +556,11 @@ export function gerarBoletinsEstadoSaoPaulo(): BoletimDeUrna[] {
 }
 
 /**
- * Seed inicial exclusivo do Estado de São Paulo (SP)
+ * Inicialização do banco local (não injeta mocks automaticamente para não mascarar a base real do Supabase)
  */
 export async function dbInicializarDadosExemplo(): Promise<void> {
-  try {
-    const total = await db.boletins.count();
-    if (total > 0) return;
-
-    const boletinsSP = gerarBoletinsEstadoSaoPaulo();
-    await db.boletins.bulkPut(boletinsSP);
-    await dbSalvarCandidatoAlvo(CANDIDATO_ALVO_DEFAULT);
-    await dbRegistrarLog({
-      timestamp: Date.now(),
-      action: 'SCAN',
-      details: 'Base de dados inicial configurada para o ESTADO DE SÃO PAULO (Deputado Federal Alvo & Votação Geral SP).'
-    });
-  } catch (err) {
-    console.error('Falha ao inicializar dados no Dexie:', err);
-  }
+  // Mantido vazio para garantir que o banco Supabase seja a única fonte de verdade
+  return;
 }
 
 /**

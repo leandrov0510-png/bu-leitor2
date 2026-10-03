@@ -24,11 +24,14 @@ import {
 } from './db/database';
 import { 
   cadastrarBoletimOnline,
+  atualizarBoletimOnline,
   listarBoletinsOnline,
   excluirBoletimOnline,
   assinarRealtimeBoletins,
   testarConectividadeSupabase,
   sincronizarBoletinsPendentes,
+  obterCandidatoAlvoOnline,
+  salvarCandidatoAlvoOnline,
   ConectividadeResultado
 } from './services/cadastros';
 import { obterConfiguracaoSupabase } from './services/supabaseService';
@@ -107,9 +110,10 @@ export default function App() {
         console.log(`[APP] ${lista.length} boletins carregados diretamente do Supabase.`);
       }
 
-      // 3. Carrega configurações do candidato alvo
-      const alvo = await dbObterCandidatoAlvo();
+      // 3. Carrega configurações do candidato alvo diretamente da nuvem
+      const alvo = await obterCandidatoAlvoOnline();
       setCandidatoAlvo(alvo);
+      dbSalvarCandidatoAlvo(alvo).catch(() => {});
     } catch (err: any) {
       console.error('[APP] Erro ao carregar dados:', err);
       showToast('error', `Falha ao carregar dados: ${err?.message || err}`);
@@ -141,6 +145,13 @@ export default function App() {
       onDelete: (idRemovido) => {
         setBoletins((atuais) => atuais.filter((b) => b.id !== idRemovido));
         showToast('info', `BU ${idRemovido} removido via Realtime.`);
+      },
+      onSettingsUpdate: (key, value) => {
+        if (key === 'candidato_alvo' && value) {
+          setCandidatoAlvo(value);
+          dbSalvarCandidatoAlvo(value).catch(() => {});
+          showToast('info', `⚡ Candidato Alvo atualizado via nuvem: ${value.nome} (${value.numero})`);
+        }
       },
       onError: (err) => {
         console.error('[APP] Erro no canal Realtime:', err);
@@ -190,8 +201,14 @@ export default function App() {
 
   async function handleUpdateCandidatoAlvo(novoAlvo: CandidatoFederalAlvo) {
     setCandidatoAlvo(novoAlvo);
-    await dbSalvarCandidatoAlvo(novoAlvo);
-    showToast('success', `Candidato Alvo atualizado para ${novoAlvo.nome} (${novoAlvo.numero})!`);
+    await dbSalvarCandidatoAlvo(novoAlvo).catch(() => {});
+    try {
+      await salvarCandidatoAlvoOnline(novoAlvo);
+      showToast('success', `Candidato Alvo sincronizado na nuvem: ${novoAlvo.nome} (${novoAlvo.numero})!`);
+    } catch (err: any) {
+      console.error('Erro ao salvar candidato alvo na nuvem:', err);
+      showToast('error', `Falha ao salvar candidato na nuvem: ${err.message}`);
+    }
   }
 
   // Leitura de QR Code
