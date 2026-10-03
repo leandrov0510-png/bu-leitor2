@@ -17,27 +17,34 @@ import { parseBoletimTse } from './parser';
 import { extrairVotosCandidatoDoBu } from './services/tallyService';
 import { 
   dbListarBoletins, 
-  dbSalvarBoletim, 
-  dbRemoverBoletim, 
-  dbInicializarDadosExemplo,
   dbObterCandidatoAlvo,
   dbSalvarCandidatoAlvo,
   dbVerificarDuplicata,
   CANDIDATO_ALVO_DEFAULT
 } from './db/database';
 import { 
-  obterConfiguracaoSupabase, 
-  sincronizarBoletim, 
-  sincronizarTodosPendentes 
-} from './services/supabaseService';
+  cadastrarBoletimOnline,
+  listarBoletinsOnline,
+  excluirBoletimOnline,
+  assinarRealtimeBoletins,
+  testarConectividadeSupabase,
+  sincronizarBoletinsPendentes,
+  ConectividadeResultado
+} from './services/cadastros';
+import { obterConfiguracaoSupabase } from './services/supabaseService';
 import { soundService } from './services/soundService';
-import { Vote, Cloud, CloudOff, Lock, Camera, X } from 'lucide-react';
+import { Vote, Lock, Camera, X, RefreshCw } from 'lucide-react';
 
 export default function App() {
   // Routes: 'home' | 'scanner' | 'admin'
   const [currentRoute, setCurrentRoute] = useState<'home' | 'scanner' | 'admin'>('home');
   const [boletins, setBoletins] = useState<BoletimDeUrna[]>([]);
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [supabaseStatus, setSupabaseStatus] = useState<ConectividadeResultado>({
+    online: false,
+    status: 'SUPABASE OFFLINE',
+    mensagem: 'Verificando conexão...'
+  });
 
   // Target candidate for Federal Deputy SP
   const [candidatoAlvo, setCandidatoAlvo] = useState<CandidatoFederalAlvo>(CANDIDATO_ALVO_DEFAULT);
@@ -76,16 +83,89 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
-  // Online / offline detector
+  // Helper para exibir notificações Toast
+  function showToast(type: 'success' | 'error' | 'info', text: string) {
+    setToastMessage({ type, text });
+    setTimeout(() => setToastMessage(null), 5000);
+  }
+
+  // 13 & 4: Carregar dados do Supabase e testar conectividade
+  const recarregarDados = useCallback(async () => {
+    setIsSyncing(true);
+    try {
+      // 1. Testa conectividade com Supabase
+      const statusRes = await testarConectividadeSupabase();
+      setSupabaseStatus(statusRes);
+
+      // 2. Busca lista direta do PostgreSQL
+      const { boletins: lista, fonte, erro } = await listarBoletinsOnline();
+      setBoletins(lista);
+
+      if (erro) {
+        showToast('error', erro);
+      } else if (fonte === 'supabase') {
+        console.log(`[APP] ${lista.length} boletins carregados diretamente do Supabase.`);
+      }
+
+      // 3. Carrega configurações do candidato alvo
+      const alvo = await dbObterCandidatoAlvo();
+      setCandidatoAlvo(alvo);
+    } catch (err: any) {
+      console.error('[APP] Erro ao carregar dados:', err);
+      showToast('error', `Falha ao carregar dados: ${err?.message || err}`);
+    } finally {
+      setIsSyncing(false);
+    }
+  }, []);
+
+  // Carga inicial
+  useEffect(() => {
+    recarregarDados();
+  }, [recarregarDados]);
+
+  // 5. Sincronização em Tempo Real (Supabase Realtime)
+  useEffect(() => {
+    const desinscreverRealtime = assinarRealtimeBoletins({
+      onInsert: (novoBu) => {
+        setBoletins((atuais) => {
+          if (atuais.some((b) => b.id === novoBu.id)) return atuais;
+          return [novoBu, ...atuais];
+        });
+        soundService.playSuccessBeep();
+        showToast('info', `⚡ Novo BU recebido via Realtime: Seção ${novoBu.secao} (${novoBu.municipioNome}/SP)`);
+      },
+      onUpdate: (buAtualizado) => {
+        setBoletins((atuais) => atuais.map((b) => (b.id === buAtualizado.id ? buAtualizado : b)));
+        showToast('info', `⚡ BU atualizado via Realtime: Seção ${buAtualizado.secao}`);
+      },
+      onDelete: (idRemovido) => {
+        setBoletins((atuais) => atuais.filter((b) => b.id !== idRemovido));
+        showToast('info', `BU ${idRemovido} removido via Realtime.`);
+      },
+      onError: (err) => {
+        console.error('[APP] Erro no canal Realtime:', err);
+      }
+    });
+
+    return () => {
+      desinscreverRealtime();
+    };
+  }, []);
+
+  // Detector de conectividade do navegador
   useEffect(() => {
     function handleOnline() {
       setIsOnline(true);
-      if (supabaseConfig.autoSync) {
-        sincronizarTodosPendentes(boletins).catch(() => {});
-      }
+      recarregarDados();
+      sincronizarBoletinsPendentes().catch(() => {});
     }
     function handleOffline() {
       setIsOnline(false);
+      setSupabaseStatus({
+        online: false,
+        status: 'SUPABASE OFFLINE',
+        mensagem: 'Aparelho desconectado da rede.'
+      });
     }
 
     window.addEventListener('online', handleOnline);
@@ -95,22 +175,9 @@ export default function App() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [supabaseConfig, boletins]);
+  }, [recarregarDados]);
 
-  // Load IndexedDB and Candidate Target on startup
-  const loadInitialData = useCallback(async () => {
-    await dbInicializarDadosExemplo();
-    const list = await dbListarBoletins();
-    setBoletins(list);
-    const alvo = await dbObterCandidatoAlvo();
-    setCandidatoAlvo(alvo);
-  }, []);
-
-  useEffect(() => {
-    loadInitialData();
-  }, [loadInitialData]);
-
-  // Master tally of target candidate votes across all SP QR codes
+  // Totalizador do Candidato Alvo
   const totalVotosAlvo = useMemo(() => {
     let soma = 0;
     boletins.forEach(bu => {
@@ -121,20 +188,13 @@ export default function App() {
     return soma;
   }, [boletins, candidatoAlvo.numero]);
 
-  // Handle Target candidate update from Admin
   async function handleUpdateCandidatoAlvo(novoAlvo: CandidatoFederalAlvo) {
     setCandidatoAlvo(novoAlvo);
     await dbSalvarCandidatoAlvo(novoAlvo);
     showToast('success', `Candidato Alvo atualizado para ${novoAlvo.nome} (${novoAlvo.numero})!`);
   }
 
-  // Toast notification helper
-  function showToast(type: 'success' | 'error' | 'info', text: string) {
-    setToastMessage({ type, text });
-    setTimeout(() => setToastMessage(null), 4000);
-  }
-
-  // Process raw text scanned by camera, upload, or simulator
+  // Leitura de QR Code
   const handleRawScan = useCallback((rawText: string) => {
     if (!rawText || !rawText.trim()) return;
 
@@ -145,13 +205,12 @@ export default function App() {
         soundService.playSuccessBeep();
         const bu = resultado.boletim;
 
-        // Verify if BU is strictly from Estado de São Paulo
         if (bu.uf.toUpperCase() !== 'SP') {
           soundService.playErrorBeep();
-          showToast('error', `Atenção: Este sistema é exclusivo para o Estado de São Paulo. A urna pertence a ${bu.uf} (${bu.municipioNome}).`);
+          showToast('error', `Atenção: Sistema exclusivo para SP. A urna pertence a ${bu.uf} (${bu.municipioNome}).`);
         }
 
-        // Verificação rigorosa de duplicata de QR Code
+        // Verificação contra a base completa
         const duplicata = boletins.find(b => 
           b.id === bu.id ||
           (b.uf.toUpperCase() === bu.uf.toUpperCase() && b.municipioCodigo === bu.municipioCodigo && b.zona === bu.zona && b.secao === bu.secao) ||
@@ -186,16 +245,15 @@ export default function App() {
       const msg = err instanceof Error ? err.message : 'Falha ao processar';
       showToast('error', `Erro na leitura: ${msg}`);
     }
-  }, []);
+  }, [boletins]);
 
-  // Confirm and send BU by Fiscal
+  // 3. ENVIO DO CADASTRO (DIRETO NO SUPABASE)
   async function handleFiscalConfirmAndSend(bu: BoletimDeUrna, fiscalNome: string): Promise<boolean> {
     if (bu.uf.toUpperCase() !== 'SP') {
       showToast('error', 'Apenas urnas do Estado de São Paulo podem ser enviadas.');
       return false;
     }
 
-    // Prevenção de duplicata no envio
     const checkDuplicata = await dbVerificarDuplicata(bu);
     if (checkDuplicata.isDuplicata) {
       soundService.playErrorBeep();
@@ -209,25 +267,22 @@ export default function App() {
       bu.fiscalNome = fiscalNome;
       bu.fiscalCargo = 'Fiscal de Seção SP';
 
-      // Save to IndexedDB local
-      await dbSalvarBoletim(bu);
+      // 3. GRAVAÇÃO DIRETA NO POSTGRESQL DO SUPABASE
+      await cadastrarBoletimOnline(bu);
 
-      // Attempt immediate cloud sync if online
-      if (navigator.onLine) {
-        await sincronizarBoletim(bu);
-      }
-
-      // Refresh list
-      const list = await dbListarBoletins();
-      setBoletins(list);
+      // Adiciona ao estado local
+      setBoletins(atuais => [bu, ...atuais.filter(b => b.id !== bu.id)]);
 
       soundService.playSuccessBeep();
-      showToast('success', `Boletim da Seção ${bu.secao} (${bu.municipioNome}/SP) enviado com sucesso!`);
+      showToast('success', `✅ SUCESSO: Boletim da Seção ${bu.secao} (${bu.municipioNome}/SP) gravado no Supabase!`);
       setDuplicateError(null);
       return true;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Falha ao enviar o Boletim.';
-      showToast('error', msg);
+      soundService.playErrorBeep();
+      const msg = err instanceof Error ? err.message : 'Falha ao salvar no banco Supabase.';
+      console.error('ERRO AO SALVAR NO SUPABASE:', err);
+      // NUNCA informa sucesso se falhou
+      showToast('error', `❌ ${msg}`);
       return false;
     } finally {
       setIsSendingBu(false);
@@ -245,24 +300,31 @@ export default function App() {
     showToast('success', 'Acesso administrativo autorizado.');
   }
 
-  // Admin actions: sync and delete
+  // Sincronizar todos pendentes
   async function handleSyncAll() {
     setIsSyncing(true);
     try {
-      await sincronizarTodosPendentes(boletins);
-      const list = await dbListarBoletins();
-      setBoletins(list);
-      showToast('success', 'Sincronização em nuvem concluída!');
+      const res = await sincronizarBoletinsPendentes();
+      await recarregarDados();
+      if (res.falhas > 0) {
+        showToast('info', `Sincronização: ${res.enviados} enviados, ${res.falhas} falharam.`);
+      } else {
+        showToast('success', `Sincronização em nuvem concluída! (${res.enviados} registros)`);
+      }
     } finally {
       setIsSyncing(false);
     }
   }
 
+  // Exclusão remota e local
   async function handleDeleteBu(id: string) {
-    await dbRemoverBoletim(id);
-    const list = await dbListarBoletins();
-    setBoletins(list);
-    showToast('info', 'Boletim removido.');
+    try {
+      await excluirBoletimOnline(id);
+      setBoletins(atuais => atuais.filter(b => b.id !== id));
+      showToast('info', `Boletim ${id} excluído com sucesso do Supabase.`);
+    } catch (err: any) {
+      showToast('error', `Erro ao excluir: ${err.message}`);
+    }
   }
 
   return (
@@ -290,7 +352,7 @@ export default function App() {
                 </span>
               </div>
               <p className="text-[10px] text-slate-400 font-medium hidden sm:block">
-                Estado de São Paulo • Fiscalização Eleitoral
+                Estado de São Paulo • Fiscalização Eleitoral Online
               </p>
             </div>
           </div>
@@ -301,12 +363,23 @@ export default function App() {
             {/* PWA Install Button for Android & iOS */}
             <PWAInstallButton variant="header" />
 
-            {/* Online / Offline status badge */}
-            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 border border-slate-700">
-              <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' : 'bg-rose-400'}`} />
+            {/* Status do Supabase & Realtime */}
+            <div 
+              onClick={() => recarregarDados()} 
+              title={supabaseStatus.mensagem}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-800 border border-slate-700 cursor-pointer hover:border-slate-500 transition"
+            >
+              <span className={`w-2 h-2 rounded-full ${
+                supabaseStatus.online 
+                  ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]' 
+                  : supabaseStatus.status.includes('RESTRITOS')
+                  ? 'bg-amber-400 shadow-[0_0_6px_#fbbf24]'
+                  : 'bg-rose-400'
+              }`} />
               <span className="text-[11px] text-slate-300 hidden sm:inline">
-                {isOnline ? 'Conectado' : 'Offline'}
+                {supabaseStatus.online ? 'Supabase Online' : supabaseStatus.status.includes('RESTRITOS') ? 'Quota Excedida' : 'Offline'}
               </span>
+              <RefreshCw className={`w-3 h-3 text-slate-400 ${isSyncing ? 'animate-spin text-emerald-400' : ''}`} />
             </div>
 
             {/* Quick Switch to Scanner from other views */}
@@ -366,7 +439,7 @@ export default function App() {
       {/* MAIN VIEWPORT ROUTER */}
       <main className="flex-1">
         
-        {/* ROUTE 1: PÁGINA INICIAL SIMPLIFICADA (Apenas 2 Opções) */}
+        {/* ROUTE 1: PÁGINA INICIAL SIMPLIFICADA */}
         {currentRoute === 'home' && (
           <HomeSimplificada
             onOpenQrScanner={() => {
@@ -386,7 +459,7 @@ export default function App() {
           />
         )}
 
-        {/* ROUTE 2: MODO LEITOR DE QR CODE DO FISCAL (Lê e Envia Apenas) */}
+        {/* ROUTE 2: MODO LEITOR DE QR CODE DO FISCAL (Lê e Envia Online) */}
         {currentRoute === 'scanner' && (
           <FiscalScannerView
             onBackHome={() => {
@@ -407,7 +480,7 @@ export default function App() {
           />
         )}
 
-        {/* ROUTE 3: SALA DE SITUAÇÃO DO ADMINISTRADOR (Todas as Informações) */}
+        {/* ROUTE 3: SALA DE SITUAÇÃO DO ADMINISTRADOR */}
         {currentRoute === 'admin' && (
           <AdminSituationRoom
             boletins={boletins}
