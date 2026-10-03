@@ -4,8 +4,8 @@ import { dbAtualizarStatusSync, dbRegistrarLog } from '../db/database';
 const STORAGE_KEY_SUPABASE = 'bu_leitor_supabase_config';
 
 const DEFAULT_CONFIG: SupabaseConfig = {
-  url: '',
-  anonKey: '',
+  url: import.meta.env.VITE_SUPABASE_URL || '',
+  anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
   tableName: 'boletins_urna',
   autoSync: true
 };
